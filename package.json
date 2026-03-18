@@ -1,10 +1,13 @@
 {
   "name": "@traveledmap/sticky-js",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Sticky elements",
   "main": "index.js",
   "publishConfig": {
     "access": "public"
+  },
+  "overrides": {
+    "make-error-cause": "1.2.2"
   },
   "scripts": {
     "start": "gulp",
@@ -22,7 +25,7 @@
     "scroll",
     "javascript"
   ],
-  "author": "rgalus <biuro@rafalgalus.pl>",
+  "author": "qlerebours <quentin@qlerebours.dev>",
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/TraveledMap/sticky-js/issues"

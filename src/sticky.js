@@ -37,6 +37,8 @@ class Sticky {
     };
 
     this.updateScrollTopPosition = this.updateScrollTopPosition.bind(this);
+    this.scrollDirection = 'down';
+    this.previousScrollTop = 0;
 
     this.updateScrollTopPosition();
     window.addEventListener('load', this.updateScrollTopPosition);
@@ -74,6 +76,10 @@ class Sticky {
 
     // set default variables
     element.sticky.active = false;
+    // Keep track of temporary state used when sticky styles animate element size.
+    element.sticky.hasSyncedStickySize = false;
+    element.sticky.bottomLocked = false;
+    element.sticky.syncRenderedSizeTimeout = null;
 
     element.sticky.marginTop = parseInt(element.getAttribute('data-margin-top')) || this.options.marginTop;
     element.sticky.marginBottom = parseInt(element.getAttribute('data-margin-bottom')) || this.options.marginBottom;
@@ -91,7 +97,10 @@ class Sticky {
 
     // fix when element is image that has not yet loaded and width, height = 0
     if (element.tagName.toLowerCase() === 'img') {
-      element.onload = () => element.sticky.rect = this.getRectangle(element);
+      element.onload = () => {
+        element.sticky.rect = this.getRectangle(element);
+        this.updateElementRenderedSize(element);
+      };
     }
 
     if (element.sticky.wrap) {
@@ -175,7 +184,7 @@ class Sticky {
    onResizeEvents(element) {
     this.vp = this.getViewportSize();
 
-    element.sticky.rect = this.getRectangle(element);
+    this.updateElementRenderedSize(element);
     element.sticky.container.rect = this.getRectangle(element.sticky.container);
 
     if (
@@ -269,7 +278,31 @@ class Sticky {
       if (element.sticky.stickyClass) {
         element.classList.add(element.sticky.stickyClass);
       }
+      element.sticky.bottomLocked = false;
+      if (this.syncRenderedSize(element)) {
+        return;
+      }
     } else if (this.scrollTop > (element.sticky.rect.top - element.sticky.marginTop)) {
+      // Once we reached the container bottom while scrolling down, keep the
+      // element in the clamped state until the user scrolls back up.
+      if (element.sticky.bottomLocked && this.scrollDirection !== 'up') {
+        this.updateElementRenderedSize(element);
+
+        this.css(element, {
+          position: 'fixed',
+          width: element.sticky.rect.width + 'px',
+          left: element.sticky.rect.left + 'px',
+          top: (element.sticky.container.rect.top + element.sticky.container.offsetHeight)
+            - (this.scrollTop + element.sticky.rect.height + element.sticky.marginBottom) + 'px',
+        });
+
+        if (element.sticky.stickyClass) {
+          element.classList.remove(element.sticky.stickyClass);
+        }
+
+        return;
+      }
+
       this.css(element, {
         position: 'fixed',
         width: element.sticky.rect.width + 'px',
@@ -280,6 +313,8 @@ class Sticky {
         (this.scrollTop + element.sticky.rect.height + element.sticky.marginTop)
         > (element.sticky.container.rect.top + element.sticky.container.offsetHeight - element.sticky.marginBottom)
       ) {
+        element.sticky.bottomLocked = true;
+        this.updateElementRenderedSize(element);
 
         if (element.sticky.stickyClass) {
           element.classList.remove(element.sticky.stickyClass);
@@ -288,14 +323,28 @@ class Sticky {
         this.css(element, {
           top: (element.sticky.container.rect.top + element.sticky.container.offsetHeight) - (this.scrollTop + element.sticky.rect.height + element.sticky.marginBottom) + 'px' }
         );
+        if (this.syncRenderedSize(element)) {
+          return;
+        }
       } else {
+        if (this.scrollDirection === 'up') {
+          element.sticky.bottomLocked = false;
+        }
+
         if (element.sticky.stickyClass) {
           element.classList.add(element.sticky.stickyClass);
         }
 
         this.css(element, { top: element.sticky.marginTop + 'px' });
+        if (this.syncRenderedSize(element)) {
+          return;
+        }
       }
     } else {
+      element.sticky.hasSyncedStickySize = false;
+      element.sticky.bottomLocked = false;
+      this.clearScheduledRenderedSizeSync(element);
+
       if (element.sticky.stickyClass) {
         element.classList.remove(element.sticky.stickyClass);
       }
@@ -315,7 +364,7 @@ class Sticky {
    */
    update() {
     this.forEach(this.elements, (element) => {
-      element.sticky.rect = this.getRectangle(element);
+      this.updateElementRenderedSize(element);
       element.sticky.container.rect = this.getRectangle(element.sticky.container);
 
       this.activate(element);
@@ -333,6 +382,7 @@ class Sticky {
     window.removeEventListener('scroll', this.updateScrollTopPosition);
 
     this.forEach(this.elements, (element) => {
+      this.clearScheduledRenderedSizeSync(element);
       this.destroyResizeEvents(element);
       this.destroyScrollEvents(element);
       delete element.sticky;
@@ -401,6 +451,103 @@ class Sticky {
 
 
   /**
+   * Updates only the rendered width/height of a sticky element without resetting
+   * its stored document position. This keeps the original sticky trigger point
+   * while allowing update() to pick up size changes caused by sticky classes.
+   * @function
+   * @param {node} element - Sticky element
+   */
+  updateElementRenderedSize(element) {
+    const renderedRect = element.getBoundingClientRect();
+
+    if (!element.sticky.rect) {
+      element.sticky.rect = this.getRectangle(element);
+    }
+
+    element.sticky.rect.width = renderedRect.width;
+    element.sticky.rect.height = renderedRect.height;
+  }
+
+
+  /**
+   * Sync rendered size back into sticky measurements and rerun positioning once
+   * after sticky styles had time to animate their dimensions.
+   * @function
+   * @param {node} element - Sticky element
+   * @param {string} reason - Debug reason
+   * @return {boolean}
+   */
+  syncRenderedSize(element) {
+    if (element.sticky.hasSyncedStickySize) {
+      return false;
+    }
+
+    // If a delayed sync is already queued, let it finish instead of stacking
+    // more reflows while the sticky animation is still running.
+    if (element.sticky.syncRenderedSizeTimeout) {
+      return true;
+    }
+
+    const renderedRect = element.getBoundingClientRect();
+    const widthChanged = Math.abs(renderedRect.width - element.sticky.rect.width) > 0.5;
+    const heightChanged = Math.abs(renderedRect.height - element.sticky.rect.height) > 0.5;
+
+    if (!widthChanged && !heightChanged) {
+      return false;
+    }
+
+    if (element.sticky.isSyncingRenderedSize) {
+      return false;
+    }
+
+    this.scheduleRenderedSizeSync(element);
+    return true;
+  }
+
+
+  /**
+   * Schedule one delayed rendered-size sync to let CSS transitions settle.
+   * @function
+   * @param {node} element - Sticky element
+   */
+  scheduleRenderedSizeSync(element) {
+    element.sticky.syncRenderedSizeTimeout = window.setTimeout(() => {
+      element.sticky.syncRenderedSizeTimeout = null;
+
+      if (!element.sticky || element.isDisabled) {
+        return;
+      }
+
+      const renderedRect = element.getBoundingClientRect();
+
+      // Sticky styles can animate height after the element becomes fixed, so we
+      // re-read the rendered box after a delay and then re-run positioning.
+      element.sticky.rect.width = renderedRect.width;
+      element.sticky.rect.height = renderedRect.height;
+      element.sticky.container.rect = this.getRectangle(element.sticky.container);
+      element.sticky.hasSyncedStickySize = true;
+
+      element.sticky.isSyncingRenderedSize = true;
+      this.setPosition(element);
+      element.sticky.isSyncingRenderedSize = false;
+    }, 500);
+  }
+
+
+  /**
+   * Clear a pending delayed rendered-size sync.
+   * @function
+   * @param {node} element - Sticky element
+   */
+  clearScheduledRenderedSizeSync(element) {
+    if (!element.sticky || !element.sticky.syncRenderedSizeTimeout) {
+      return;
+    }
+
+    window.clearTimeout(element.sticky.syncRenderedSizeTimeout);
+    element.sticky.syncRenderedSizeTimeout = null;
+  }
+  /**
    * Function that returns viewport dimensions
    * @function
    * @return {object}
@@ -420,6 +567,8 @@ class Sticky {
    */
   updateScrollTopPosition() {
     this.scrollTop = (window.pageYOffset || document.scrollTop)  - (document.clientTop || 0) || 0;
+    this.scrollDirection = this.scrollTop >= this.previousScrollTop ? 'down' : 'up';
+    this.previousScrollTop = this.scrollTop;
   }
 
 
