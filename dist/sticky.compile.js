@@ -39,7 +39,8 @@ var Sticky = /*#__PURE__*/function () {
       marginBottom: options.marginBottom || 0,
       stickyFor: options.stickyFor || 0,
       stickyClass: options.stickyClass || null,
-      stickyContainer: options.stickyContainer || 'body'
+      stickyContainer: options.stickyContainer || 'body',
+      stickyHeight: options.stickyHeight || null
     };
     this.updateScrollTopPosition = this.updateScrollTopPosition.bind(this);
     this.scrollDirection = 'down';
@@ -95,6 +96,7 @@ var Sticky = /*#__PURE__*/function () {
       element.sticky.marginBottom = parseInt(element.getAttribute('data-margin-bottom')) || this.options.marginBottom;
       element.sticky.stickyFor = parseInt(element.getAttribute('data-sticky-for')) || this.options.stickyFor;
       element.sticky.stickyClass = element.getAttribute('data-sticky-class') || this.options.stickyClass;
+      element.sticky.stickyHeight = element.getAttribute('data-sticky-height') || this.options.stickyHeight;
       element.sticky.wrap = element.hasAttribute('data-sticky-wrap') ? true : this.options.wrap; // @todo attribute for stickyContainer
       // element.sticky.stickyContainer = element.getAttribute('data-sticky-container') || this.options.stickyContainer;
 
@@ -139,7 +141,9 @@ var Sticky = /*#__PURE__*/function () {
   }, {
     key: "activate",
     value: function activate(element) {
-      if (element.sticky.rect.top + element.sticky.rect.height < element.sticky.container.rect.top + element.sticky.container.rect.height && element.sticky.stickyFor < this.vp.width && !element.sticky.active) {
+      var stickyHeight = this.getStickyStateHeight(element);
+
+      if (element.sticky.rect.top + stickyHeight < element.sticky.container.rect.top + element.sticky.container.rect.height && element.sticky.stickyFor < this.vp.width && !element.sticky.active) {
         element.sticky.active = true;
       }
 
@@ -199,10 +203,11 @@ var Sticky = /*#__PURE__*/function () {
       this.vp = this.getViewportSize();
       this.updateElementRenderedSize(element);
       element.sticky.container.rect = this.getRectangle(element.sticky.container);
+      var stickyHeight = this.getStickyStateHeight(element);
 
-      if (element.sticky.rect.top + element.sticky.rect.height < element.sticky.container.rect.top + element.sticky.container.rect.height && element.sticky.stickyFor < this.vp.width && !element.sticky.active) {
+      if (element.sticky.rect.top + stickyHeight < element.sticky.container.rect.top + element.sticky.container.rect.height && element.sticky.stickyFor < this.vp.width && !element.sticky.active) {
         element.sticky.active = true;
-      } else if (element.sticky.rect.top + element.sticky.rect.height >= element.sticky.container.rect.top + element.sticky.container.rect.height || element.sticky.stickyFor >= this.vp.width && element.sticky.active) {
+      } else if (element.sticky.rect.top + stickyHeight >= element.sticky.container.rect.top + element.sticky.container.rect.height || element.sticky.stickyFor >= this.vp.width && element.sticky.active) {
         element.sticky.active = false;
       }
 
@@ -268,8 +273,9 @@ var Sticky = /*#__PURE__*/function () {
         top: '',
         left: ''
       });
+      var stickyHeight = this.getStickyStateHeight(element);
 
-      if (this.vp.height < element.sticky.rect.height || !element.sticky.active) {
+      if (this.vp.height < stickyHeight || !element.sticky.active) {
         return;
       }
 
@@ -327,7 +333,7 @@ var Sticky = /*#__PURE__*/function () {
           left: element.sticky.rect.left + 'px'
         });
 
-        if (this.scrollTop + element.sticky.rect.height + element.sticky.marginTop > element.sticky.container.rect.top + element.sticky.container.offsetHeight - element.sticky.marginBottom) {
+        if (this.scrollTop + stickyHeight + element.sticky.marginTop > element.sticky.container.rect.top + element.sticky.container.offsetHeight - element.sticky.marginBottom) {
           element.sticky.bottomLocked = true;
           this.updateElementRenderedSize(element);
 
@@ -504,6 +510,79 @@ var Sticky = /*#__PURE__*/function () {
         width: width,
         height: height
       };
+    }
+    /**
+     * Returns the height that should be used for sticky-state constraint checks.
+     * When an explicit stickyHeight is provided, use that target height instead of
+     * the currently rendered height to avoid sticky/non-sticky ping-pong.
+     * @function
+     * @param {node} element - Sticky element
+     * @return {number}
+     */
+
+  }, {
+    key: "getStickyStateHeight",
+    value: function getStickyStateHeight(element) {
+      var explicitStickyHeight = this.resolveStickyHeight(element);
+
+      if (explicitStickyHeight !== null) {
+        return explicitStickyHeight;
+      }
+
+      return element.sticky.rect.height;
+    }
+    /**
+     * Resolves the configured stickyHeight option/attribute into rendered pixels.
+     * The value is measured against a hidden fixed-position element so viewport
+     * units and percentages follow the sticky element's fixed positioning rules.
+     * @function
+     * @param {node} element - Sticky element
+     * @return {number|null}
+     */
+
+  }, {
+    key: "resolveStickyHeight",
+    value: function resolveStickyHeight(element) {
+      var stickyHeight = element.sticky.stickyHeight;
+
+      if (stickyHeight === null || typeof stickyHeight === 'undefined' || stickyHeight === '') {
+        return null;
+      }
+
+      if (typeof stickyHeight === 'number') {
+        return stickyHeight;
+      }
+
+      var numericStickyHeight = Number(stickyHeight);
+
+      if (!Number.isNaN(numericStickyHeight) && Number.isFinite(numericStickyHeight)) {
+        return numericStickyHeight;
+      }
+
+      if (typeof stickyHeight !== 'string') {
+        return null;
+      }
+
+      var measurementElement = document.createElement('div');
+      measurementElement.setAttribute('aria-hidden', 'true');
+      this.css(measurementElement, {
+        position: 'fixed',
+        visibility: 'hidden',
+        pointerEvents: 'none',
+        top: '0',
+        left: '0',
+        width: '0',
+        height: stickyHeight,
+        padding: '0',
+        border: '0',
+        margin: '0',
+        boxSizing: 'border-box',
+        fontSize: window.getComputedStyle(element).fontSize
+      });
+      this.body.appendChild(measurementElement);
+      var measuredHeight = measurementElement.getBoundingClientRect().height;
+      this.body.removeChild(measurementElement);
+      return measuredHeight || null;
     }
     /**
      * Updates only the rendered width/height of a sticky element without resetting

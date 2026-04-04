@@ -1,6 +1,6 @@
 {
   "name": "@traveledmap/sticky-js",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Sticky elements",
   "main": "index.js",
   "publishConfig": {
